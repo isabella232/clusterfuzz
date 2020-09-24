@@ -23,11 +23,16 @@ from base import utils
 from bot.fuzzers import engine
 from bot.fuzzers import utils as fuzzer_utils
 from bot.fuzzers.syzkaller import config
+from google_cloud_utils import gsutil
 from metrics import logs
 from system import environment
 from system import new_process
 
 REPRODUCE_REGEX = re.compile(r'reproduced (\d+) crashes')
+CORPUS_BUCKET = environment.get_value('CORPUS_BUCKET')
+GCS_PATH = 'corpus'
+CORPUS_FILENAME = 'corpus.db'
+DEVICE_SERIAL = environment.get_value('ANDROID_SERIAL')
 
 
 def get_work_dir():
@@ -37,7 +42,7 @@ def get_work_dir():
 
 def get_config():
   """Get arguments for a given fuzz target."""
-  device_serial = environment.get_value('ANDROID_SERIAL')
+  device_serial = DEVICE_SERIAL
   build_dir = environment.get_value('BUILD_DIR')
   temp_dir = fuzzer_utils.get_temp_dir()
 
@@ -72,6 +77,20 @@ def get_cover_file_path():
 def get_runner(fuzzer_path):
   """Return a syzkaller runner object."""
   return AndroidSyzkallerRunner(fuzzer_path)
+
+
+def download_corpus():
+  corpus_gcs_path = os.path.join(
+      'gs://' + CORPUS_BUCKET, GCS_PATH, DEVICE_SERIAL + '.db')
+  target_path = os.path.join(get_work_dir(), CORPUS_FILENAME)
+  return gsutil.GSUtilRunner().download_file(corpus_gcs_path, target_path)
+
+
+def upload_corpus():
+  source_path = os.path.join(get_work_dir(), CORPUS_FILENAME)
+  corpus_gcs_path = os.path.join(
+      'gs://' + CORPUS_BUCKET, GCS_PATH, DEVICE_SERIAL + '.db')
+  return gsutil.GSUtilRunner().upload_file(source_path, corpus_gcs_path)
 
 
 class AndroidSyzkallerRunner(new_process.UnicodeProcessRunner):
@@ -148,11 +167,17 @@ class AndroidSyzkallerRunner(new_process.UnicodeProcessRunner):
         result += strip_regex.sub('', line) + '\n'
       return result
 
+    # Download corpus ahead of fuzzing
+    download_corpus()
+
     logs.log('Running Syzkaller.')
     additional_args = copy.copy(additional_args)
     fuzz_result = self.run_and_wait(additional_args, timeout=fuzz_timeout)
     logs.log('Syzkaller stopped, fuzzing timed out: {}'.format(
         fuzz_result.time_executed))
+
+    # Upload corpus after fuzzing is completed
+    upload_corpus()
 
     fuzz_logs = (fuzz_result.output or '') + '\n'
     crashes = []

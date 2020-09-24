@@ -1581,7 +1581,9 @@ class FuzzingSession(object):
     # Synchronize corpus files with GCS
     sync_corpus_directory = builtin.get_corpus_directory(
         self.data_directory, self.fuzz_target.project_qualified_name())
-    self.sync_corpus(sync_corpus_directory)
+    # For syzkaller, it is one file corpus.db and is being synced in its runner.
+    if environment.platform() != 'ANDROID_KERNEL':
+      self.sync_corpus(sync_corpus_directory)
 
     # Reset memory tool options.
     environment.reset_current_memory_tool_options(
